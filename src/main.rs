@@ -233,7 +233,7 @@ impl Listener {
                         && (transaction.payload[2] == KASPATALK_PROTOCOL_PREFIX[2])
                         && (transaction.payload[3] == KASPATALK_PROTOCOL_PREFIX[3])
                     {
-                        log_info!("MESSAGE RECEIVED!");
+                        //log_info!("MESSAGE RECEIVED!");
 
                         // Extracting receiver address
                         let receiver_address: String = match &transaction.outputs[0].verbose_data {
@@ -285,10 +285,12 @@ impl Listener {
                         {
                             Ok(stored_message) => match stored_message {
                                 Some(stored_message) => {
+                                    /* 
                                     log_info!(
                                         "Transaction found in db: {}",
                                         stored_message.transaction_id
                                     );
+                                    */
                                     //log_info!("MESSAGE SKIPPED!");
                                 }
                                 None => {
