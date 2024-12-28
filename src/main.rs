@@ -562,7 +562,7 @@ async fn main() -> Result<()> {
     let args = Args::parse();
 
     // Building database
-    let db = Database::open_path("kaspachat-indexer.db").unwrap();
+    let db = Database::open_path("kaspatalk.db").unwrap();
     let stored_messages: Collection<Message> = db.collection("stored-messages");
 
     // Building rusty-kaspa listener
