@@ -1,25 +1,27 @@
 #![allow(warnings)]
 
-use clap::Parser;
-use axum::{
-    routing::{get, post},
-    http::StatusCode,
-    Json, 
-    Router,
-    handler,
-    extract::State,
-    extract
-};
-use futures::stream::Collect;
-use serde::{Serialize, Deserialize};
-use kaspa_notify::notification::test_helpers::Data;
-use polodb_core::{Collection, CollectionT, Database};
-use polodb_core::bson::{doc, Document};
 use async_channel::{Receiver, Sender};
+use axum::{
+    extract,
+    extract::{Path, Query, State},
+    handler,
+    http::StatusCode,
+    routing::{get, post},
+    Json, Router,
+};
+use clap::Parser;
+use futures::stream::Collect;
 pub use futures::{select, select_biased, FutureExt, Stream, StreamExt, TryStreamExt};
-use std::{any::Any, fmt::format};
-use std::sync::atomic::{AtomicBool, Ordering};
+use kaspa_notify::notification::test_helpers::Data;
+use polodb_core::bson::{doc, Document};
+use polodb_core::{Collection, CollectionT, Database};
+use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::{any::Any, fmt::format};
+use std::{
+    clone,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 // We use workflow-rs primitives for async task and channel management
 // as they function uniformly in tokio as well as WASM32 runtimes.
@@ -32,18 +34,23 @@ use kaspa_wrpc_client::prelude::*;
 // reuse wRPC Result type for convenience
 use kaspa_wrpc_client::result::Result;
 
-
 #[derive(Debug, Serialize, Deserialize)]
 struct Message {
     sender: String,
     receiver: String,
     transaction_id: String,
     block_time: u64,
-    message: String
+    message: String,
 }
 
-impl Message{
-    fn new(sender: String, receiver: String, transaction_id: String, block_time: u64, message: String) -> Self {
+impl Message {
+    fn new(
+        sender: String,
+        receiver: String,
+        transaction_id: String,
+        block_time: u64,
+        message: String,
+    ) -> Self {
         Self {
             sender,
             receiver,
@@ -51,7 +58,8 @@ impl Message{
             block_time,
             message,
         }
-}}
+    }
+}
 
 struct Inner {
     // task control duplex channel - a pair of channels where sender
@@ -69,7 +77,7 @@ struct Inner {
     // we can have multiple IDs for different scopes
     // paired with multiple notification channels
     listener_id: Mutex<Option<ListenerId>>,
-    stored_messages: Collection<Message>
+    stored_messages: Collection<Message>,
 }
 
 // Example primitive that manages an RPC connection and
@@ -77,17 +85,31 @@ struct Inner {
 // events and node notifications we subscribe to.
 #[derive(Clone)]
 pub struct Listener {
-    inner: Arc<Inner>
+    inner: Arc<Inner>,
 }
 
 impl Listener {
-    pub fn try_new(network_id: NetworkId, url: Option<String>, stored_messages: Collection<Message>) -> Result<Self> {
+    pub fn try_new(
+        network_id: NetworkId,
+        url: Option<String>,
+        stored_messages: Collection<Message>,
+    ) -> Result<Self> {
         // if not url is supplied we use the default resolver to
         // obtain the public node rpc endpoint
-        let (resolver, url) = if let Some(url) = url { (None, Some(url)) } else { (Some(Resolver::default()), None) };
+        let (resolver, url) = if let Some(url) = url {
+            (None, Some(url))
+        } else {
+            (Some(Resolver::default()), None)
+        };
 
         // Create a basic Kaspa RPC client instance using Borsh encoding.
-        let client = Arc::new(KaspaRpcClient::new_with_args(WrpcEncoding::Borsh, url.as_deref(), resolver, Some(network_id), None)?);
+        let client = Arc::new(KaspaRpcClient::new_with_args(
+            WrpcEncoding::Borsh,
+            url.as_deref(),
+            resolver,
+            Some(network_id),
+            None,
+        )?);
 
         let inner = Inner {
             task_ctl: DuplexChannel::oneshot(),
@@ -98,7 +120,9 @@ impl Listener {
             stored_messages: stored_messages,
         };
 
-        Ok(Self { inner: Arc::new(inner) })
+        Ok(Self {
+            inner: Arc::new(inner),
+        })
     }
 
     // Helper fn to check if we are currently connected
@@ -114,8 +138,11 @@ impl Listener {
     async fn start(&self) -> Result<()> {
         // we do not block the async connect() function
         // as we handle the connection state in the event task
-        let options = ConnectOptions { block_async_connect: false, ..Default::default() };
-        
+        let options = ConnectOptions {
+            block_async_connect: false,
+            ..Default::default()
+        };
+
         // start the event processing task
         self.start_event_task().await?;
 
@@ -145,13 +172,19 @@ impl Listener {
         // are "lost" if we disconnect. For that reason we must
         // re-register all notification scopes when we connect.
 
-        let listener_id = self.client().rpc_api().register_new_listener(ChannelConnection::new(
-            "wrpc-example-subscriber",
-            self.inner.notification_channel.sender.clone(),
-            ChannelType::Persistent,
-        ));
+        let listener_id = self
+            .client()
+            .rpc_api()
+            .register_new_listener(ChannelConnection::new(
+                "wrpc-example-subscriber",
+                self.inner.notification_channel.sender.clone(),
+                ChannelType::Persistent,
+            ));
         *self.inner.listener_id.lock().unwrap() = Some(listener_id);
-        self.client().rpc_api().start_notify(listener_id, Scope::BlockAdded(BlockAddedScope {})).await?;
+        self.client()
+            .rpc_api()
+            .start_notify(listener_id, Scope::BlockAdded(BlockAddedScope {}))
+            .await?;
         Ok(())
     }
 
@@ -170,64 +203,115 @@ impl Listener {
         Ok(())
     }
 
-
-    
-
     // generic notification handler fn called by the event task
     async fn handle_notification(&self, notification: Notification) -> Result<()> {
         //log_info!("Notification: {notification:?}");
         let stored_messages = &self.inner.stored_messages;
         match notification {
-            Notification::BlockAdded(block_notification) => extract_relevant_transactions_data(block_notification, stored_messages),
-            _ => ()
+            Notification::BlockAdded(block_notification) => {
+                extract_relevant_transactions_data(block_notification, stored_messages)
+            }
+            _ => (),
         }
-        
-        fn extract_relevant_transactions_data(block_notification : BlockAddedNotification, stored_messages: &Collection<Message>) {
-            for transaction in &block_notification.block.transactions{
+
+        fn extract_relevant_transactions_data(
+            block_notification: BlockAddedNotification,
+            stored_messages: &Collection<Message>,
+        ) {
+            for transaction in &block_notification.block.transactions {
                 if transaction.payload.len() >= 4 {
                     //Payload conversion rule:
                     // From text to HEX:
                     //     From 0123456789 to 30313233343536373839
                     // Then, from HEX to uint8:
                     //     from 30313233343536373839 to 48 49 50 51 52 53 54 55 56 57
-                    // KaspaChat protocol prefix (kch:) in uint8: 107 99 104 58                    
-                    if (transaction.payload[0] == 107) && (transaction.payload[1] == 99) && (transaction.payload[2] == 104){
-                        log_info!("MESSAGE RECEIVED!");                        
-                        
-                        // Extracting sender address
-                        // TODO
-                        let sender_address : String = "sender_address".to_owned();
+                    // KaspaChat protocol prefix (kch:) in uint8: 107 99 104 58
+                    // KaspaTalk new protocol prefix (ktk:) in uint8: 107 116 107 58
+                    let KASPATALK_PROTOCOL_PREFIX = [107, 116, 107, 58];
+                    if (transaction.payload[0] == KASPATALK_PROTOCOL_PREFIX[0])
+                        && (transaction.payload[1] == KASPATALK_PROTOCOL_PREFIX[1])
+                        && (transaction.payload[2] == KASPATALK_PROTOCOL_PREFIX[2])
+                        && (transaction.payload[3] == KASPATALK_PROTOCOL_PREFIX[3])
+                    {
+                        log_info!("MESSAGE RECEIVED!");
 
                         // Extracting receiver address
-                        let receiver_address : String = match &transaction.outputs[0].verbose_data {
+                        let receiver_address: String = match &transaction.outputs[0].verbose_data {
                             Some(x) => x.script_public_key_address.address_to_string(),
-                            None => "".to_owned()};
-                        
+                            None => "".to_owned(),
+                        };
+
                         // Extracting transaction ID
-                        let transaction_id : String = match &transaction.verbose_data {
+                        let transaction_id: String = match &transaction.verbose_data {
                             Some(x) => x.transaction_id.to_string(),
-                            None => "".to_owned()};
+                            None => "".to_owned(),
+                        };
 
                         // Extracting block_time
-                        let block_time : u64 = match &transaction.verbose_data {
+                        let block_time: u64 = match &transaction.verbose_data {
                             Some(x) => x.block_time,
-                            None => 0};
-                        
+                            None => 0,
+                        };
+
                         // Extracting payload
-                        let payload : String = std::str::from_utf8(&transaction.payload).expect("None").to_owned();
-                        
+                        let payload: String = std::str::from_utf8(&transaction.payload)
+                            .expect("None")
+                            .to_owned();
+
                         // Extracting message from payload
-                        let message : String = payload[4..payload.len()].to_string();
-                        
-                        let message_to_save = Message::new(sender_address, receiver_address, transaction_id, block_time, message);
-                        stored_messages.insert_one(message_to_save);
+                        let clean_payload: String = payload[4..payload.len()].to_string();
+
+                        // Split the string at the first occurrence of '|'
+                        let payload_parts: Vec<&str> = clean_payload.splitn(2, '|').collect();
+
+                        // Extracting sender address
+                        // let sender_address: String = "third_sender_address".to_owned();
+
+                        let mut sender_address = "".to_owned();
+                        let mut message = "".to_owned();
+
+                        // Check if we have exactly two parts #TODO
+                        if payload_parts.len() == 2 {
+                            sender_address = String::from(payload_parts[0]);
+                            message = String::from(payload_parts[1]);
+                        } else {
+                            println!("Wrong payload");
+                            return;
+                        }
+
+                        // Check if transaction is already stored; if not, save transaction in database
+                        match stored_messages
+                            .find_one(doc! {"transaction_id":  { "$eq": &transaction_id }})
+                        {
+                            Ok(stored_message) => match stored_message {
+                                Some(stored_message) => {
+                                    log_info!(
+                                        "Transaction found in db: {}",
+                                        stored_message.transaction_id
+                                    );
+                                    //log_info!("MESSAGE SKIPPED!");
+                                }
+                                None => {
+                                    //log_info!("Transaction not found in db: {}", &transaction_id);
+                                    let message_to_save = Message::new(
+                                        sender_address,
+                                        receiver_address,
+                                        transaction_id,
+                                        block_time,
+                                        message,
+                                    );
+                                    stored_messages.insert_one(message_to_save);
+                                    log_info!("MESSAGE SAVED!");
+                                }
+                            },
+                            Err(_) => {}
+                        }
                     }
                 }
             }
         }
         Ok(())
     }
-
 
     // generic connection handler fn called by the event task
     async fn handle_connect(&self) -> Result<()> {
@@ -336,7 +420,10 @@ impl Listener {
 
             // handle our own power down on the rpc channel that remains connected
             if listener.is_connected() {
-                listener.handle_disconnect().await.unwrap_or_else(|err| log_error!("{err}"));
+                listener
+                    .handle_disconnect()
+                    .await
+                    .unwrap_or_else(|err| log_error!("{err}"));
             }
 
             // post task termination event
@@ -346,21 +433,28 @@ impl Listener {
     }
 
     async fn stop_event_task(&self) -> Result<()> {
-        self.inner.task_ctl.signal(()).await.expect("stop_event_task() signal error");
+        self.inner
+            .task_ctl
+            .signal(())
+            .await
+            .expect("stop_event_task() signal error");
         Ok(())
     }
 }
 
 struct AppState {
-    database: Database
+    database: Database,
 }
 
 // REST API call to retrieve all messages in database
 #[axum_macros::debug_handler]
 async fn get_all_messages(State(state): State<Arc<AppState>>) -> Json<Vec<Message>> {
-    let mut all_messages : Vec<Message> = Vec::new(); 
-    let stored_messages : Collection<Message> = state.database.collection("stored-messages");
-    let query_result = stored_messages.find(doc! {}).run().expect("Error while querying database");
+    let mut all_messages: Vec<Message> = Vec::new();
+    let stored_messages: Collection<Message> = state.database.collection("stored-messages");
+    let query_result = stored_messages
+        .find(doc! {})
+        .run()
+        .expect("Error while querying database");
     for item in query_result {
         match item {
             Ok(message) => all_messages.push(message),
@@ -370,35 +464,124 @@ async fn get_all_messages(State(state): State<Arc<AppState>>) -> Json<Vec<Messag
     Json(all_messages)
 }
 
+#[derive(Deserialize, Clone)]
+struct GetMessagesQueryParameters {
+    address_1: String,
+    address_2: String,
+}
+
+// REST API call to retrieve messages of a specific conversation (http://localhost:3000/get-messages?address_1=abc&address_2=def)
+// http://localhost:3000/get-messages?address_1=sender_address&address_2=kaspatest:qr3qzzsx6wc59tgchvx2eyrms4u76tcu0xdncz2a4zd83ddnwrl95e8v3racu
+#[axum_macros::debug_handler]
+async fn get_messages(
+    State(state): State<Arc<AppState>>,
+    parameters: Query<GetMessagesQueryParameters>,
+) -> Json<Vec<Message>> {
+    let address_1: String = parameters.address_1.clone();
+    let address_2: String = parameters.address_2.clone();
+    let mut message_list: Vec<Message> = Vec::new();
+    let stored_messages: Collection<Message> = state.database.collection("stored-messages");
+    let query_result = stored_messages
+        .find(doc! {
+            "$or": [
+                {
+                    "sender" : { "$eq" : address_1.clone()},
+                    "receiver" : { "$eq" : address_2.clone()}
+                },
+                {
+                    "sender" : { "$eq" : address_2.clone()},
+                    "receiver" : { "$eq" : address_1.clone()}
+                },
+            ]
+        })
+        .run()
+        .expect("Error while querying database");
+    for item in query_result {
+        match item {
+            Ok(message) => message_list.push(message),
+            Err(error) => println!("Error while querying data: {error:?}"),
+        };
+    }
+    Json(message_list)
+}
+
+#[derive(Deserialize, Clone)]
+struct GetPeersQueryParameters {
+    address: String,
+}
+
+// REST API call to retrieve peers who have active conversation with a specific address (http://localhost:3000/get-peers?address=abc)
+// http://localhost:3000/get-peers?address=kaspatest:qr3qzzsx6wc59tgchvx2eyrms4u76tcu0xdncz2a4zd83ddnwrl95e8v3racu
+#[axum_macros::debug_handler]
+async fn get_peers(
+    State(state): State<Arc<AppState>>,
+    parameters: Query<GetPeersQueryParameters>,
+) -> Json<Vec<String>> {
+    let user_address: String = parameters.address.clone();
+    let mut peers_list: Vec<String> = Vec::new();
+    let stored_messages: Collection<Message> = state.database.collection("stored-messages");
+    let query_result = stored_messages
+        .find(doc! {
+            "$or": [
+                {"sender" : { "$eq" : user_address.clone()}},
+                {"receiver" : { "$eq" : user_address.clone()}}
+            ]
+        })
+        .run()
+        .expect("Error while querying database");
+    for item in query_result {
+        match item {
+            Ok(message) => {
+                if (message.sender == user_address.clone()) {
+                    if !peers_list.contains(&message.receiver) {
+                        peers_list.push(message.receiver);
+                    }
+                } else if (message.sender != user_address.clone()) {
+                    if !peers_list.contains(&message.sender) {
+                        peers_list.push(message.sender);
+                    }
+                }
+            }
+            Err(error) => println!("Error while querying data: {error:?}"),
+        };
+    }
+    Json(peers_list)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-  
     /// Parsing CLI flags
     #[derive(Parser, Debug)]
     #[command(version, about, long_about = None)]
-    struct Args {        
+    struct Args {
         #[arg(short, long)]
-        rusty_kaspa_address : String,
+        rusty_kaspa_address: String,
     }
-    let args = Args::parse();    
-  
+    let args = Args::parse();
+
     // Building database
-    let db = Database::open_path("kaspachat-indexer.db").unwrap();  
-    let stored_messages : Collection<Message> = db.collection("stored-messages");
-    
+    let db = Database::open_path("kaspachat-indexer.db").unwrap();
+    let stored_messages: Collection<Message> = db.collection("stored-messages");
+
     // Building rusty-kaspa listener
     let rusty_kaspa_address_prefix = "ws://".to_owned();
     let rusty_kaspa_url = args.rusty_kaspa_address;
     let complete_rusty_kaspa_address = format!("{rusty_kaspa_address_prefix}{rusty_kaspa_url}");
-    let listener = Listener::try_new(NetworkId::with_suffix(NetworkType::Testnet, 11), Some(complete_rusty_kaspa_address), stored_messages)?;
+    let listener = Listener::try_new(
+        NetworkId::with_suffix(NetworkType::Testnet, 11),
+        Some(complete_rusty_kaspa_address),
+        stored_messages,
+    )?;
     listener.start().await?;
 
     // Building webserver app
-    let app_state = Arc::new(AppState { database : db });    
+    let app_state = Arc::new(AppState { database: db });
     let router = Router::new()
-        .route("/", get(get_all_messages))
+        .route("/get-all-messages", get(get_all_messages))
+        .route("/get-messages", get(get_messages))
+        .route("/get-peers", get(get_peers))
         .with_state(app_state);
-    
+
     // Serving webserver app
     let webserver = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
     axum::serve(webserver, router).await.unwrap();
@@ -407,10 +590,15 @@ async fn main() -> Result<()> {
     let (shutdown_sender, shutdown_receiver) = oneshot::<()>();
     ctrlc::set_handler(move || {
         log_info!("^SIGTERM - shutting down...");
-        shutdown_sender.try_send(()).expect("Error sending shutdown signal...");
-    }).expect("Unable to set the Ctrl+C signal handler");
-    shutdown_receiver.recv().await.expect("Error waiting for shutdown signal...");
+        shutdown_sender
+            .try_send(())
+            .expect("Error sending shutdown signal...");
+    })
+    .expect("Unable to set the Ctrl+C signal handler");
+    shutdown_receiver
+        .recv()
+        .await
+        .expect("Error waiting for shutdown signal...");
     listener.stop().await?;
     Ok(())
 }
-

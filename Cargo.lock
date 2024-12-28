@@ -2089,7 +2089,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "kaspachat-indexer"
+name = "kaspatalk-backend"
 version = "0.1.0"
 dependencies = [
  "async-channel 2.3.1",
