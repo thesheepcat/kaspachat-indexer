@@ -33,7 +33,8 @@ use listener::*;
 mod api;
 use api::*;
 mod GetPeersQueryParameters;
-
+mod cli_parser;
+use cli_parser::*;
 
 struct Inner {
     // task control duplex channel - a pair of channels where sender
@@ -66,22 +67,13 @@ struct GetMessagesQueryParameters {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    /// Parsing CLI flags
-    #[derive(Parser, Debug)]
-    #[command(version, about, long_about = None)]
-    struct Args {
-        #[arg(short, long)]
-        rusty_kaspa_address: String,
-    }
-    let args = Args::parse();
-
+    let args = cli_parser::Args::parse();
     // Building database
     let db = Database::open_path("kaspatalk.db").unwrap();
     let stored_messages: Collection<Message> = db.collection("stored-messages");
-
     // Building rusty-kaspa listener
     let rusty_kaspa_address_prefix = "ws://".to_owned();
-    let rusty_kaspa_url = args.rusty_kaspa_address;
+    let rusty_kaspa_url = args.rusty_kaspa_address();
     let complete_rusty_kaspa_address = format!("{rusty_kaspa_address_prefix}{rusty_kaspa_url}");
     let listener = Listener::try_new(
         NetworkId::with_suffix(NetworkType::Testnet, 11),
