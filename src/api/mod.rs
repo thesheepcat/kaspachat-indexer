@@ -5,7 +5,7 @@ use polodb_core::bson::doc;
 use polodb_core::{Collection, CollectionT};
 use crate::{AppState, GetMessagesQueryParameters};
 use crate::message::Message;
-use crate::getpeersqueryparameters::*;
+use crate::GetPeersQueryParameters::*;
 
 ///GET Calls
 // REST API call to retrieve messages of a specific conversation (http://localhost:3000/get-messages?address_1=abc&address_2=def)

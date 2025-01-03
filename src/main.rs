@@ -32,7 +32,7 @@ mod listener;
 use listener::*;
 mod api;
 use api::*;
-mod getpeersqueryparameters;
+mod GetPeersQueryParameters;
 
 
 struct Inner {
